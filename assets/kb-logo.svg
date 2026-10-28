@@ -1,0 +1,17 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" role="img" aria-label="KnowledgeBase Assistant logo">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#4f46e5"/>
+      <stop offset="1" stop-color="#06b6d4"/>
+    </linearGradient>
+  </defs>
+  <rect width="256" height="256" rx="56" fill="url(#bg)"/>
+  <!-- open book -->
+  <path d="M48 96c26-8 52-6 80 8v90c-28-14-54-16-80-8z" fill="#fff" fill-opacity=".95"/>
+  <path d="M208 96c-26-8-52-6-80 8v90c28-14 54-16 80-8z" fill="#fff" fill-opacity=".8"/>
+  <!-- chat bubble -->
+  <path d="M96 40h64a20 20 0 0 1 20 20v28a20 20 0 0 1-20 20h-30l-22 18v-18H96a20 20 0 0 1-20-20V60a20 20 0 0 1 20-20z" fill="#1e1b4b"/>
+  <circle cx="106" cy="74" r="8" fill="#fff"/>
+  <circle cx="128" cy="74" r="8" fill="#fff"/>
+  <circle cx="150" cy="74" r="8" fill="#fff"/>
+</svg>

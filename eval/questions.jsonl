@@ -1,0 +1,6 @@
+{"id":"q1","question":"How do I get started with the assistant?","category":"easy"}
+{"id":"q2","question":"Which environment variable sets the application name?","category":"easy"}
+{"id":"q3","question":"How do I index my own Markdown documents?","category":"medium"}
+{"id":"q4","question":"What should I do if answers are very slow?","category":"medium"}
+{"id":"q5","question":"Does the assistant send my documents to an external service?","category":"easy"}
+{"id":"q6","question":"What is the capital of Australia?","category":"out_of_scope"}

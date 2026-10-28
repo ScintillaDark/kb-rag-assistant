@@ -1,0 +1,23 @@
+# Python
+__pycache__/
+*.pyc
+.venv/
+.pytest_cache/
+.ruff_cache/
+
+# Local configuration and secrets
+.env
+
+# Local corpora, indexes and generated artifacts (build with `make sample` or scripts/sync_kb.sh)
+data/
+artifacts/
+logs/
+*.pid
+
+# Streamlit
+.streamlit/
+
+# OS / editors
+.DS_Store
+.idea/
+.vscode/
