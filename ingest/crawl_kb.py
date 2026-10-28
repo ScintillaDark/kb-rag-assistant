@@ -13,6 +13,7 @@ import requests
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from common.branding import get_branding  # noqa: E402
+from ingest.robots import RobotsPolicy  # noqa: E402
 
 
 def load_urls(path: str) -> list[str]:
@@ -49,6 +50,7 @@ def main() -> None:
             "Accept": "text/html,application/xhtml+xml",
         }
     )
+    robots_policy = RobotsPolicy(get_branding().user_agent, timeout=args.timeout)
 
     ok_count = 0
     error_count = 0
@@ -63,24 +65,28 @@ def main() -> None:
             error = None
             content_hash = None
 
-            attempt = 0
-            while attempt <= args.retries:
-                try:
-                    resp = session.get(url, timeout=args.timeout)
-                    code = resp.status_code
-                    resp.raise_for_status()
-                    html = resp.text
-                    content_hash = hashlib.sha256(html.encode("utf-8")).hexdigest()
-                    html_path.write_text(html, encoding="utf-8")
-                    status = "ok"
-                    error = None
-                    break
-                except Exception as exc:
-                    status = "error"
-                    error = str(exc)
-                    attempt += 1
-                    if attempt <= args.retries:
-                        time.sleep(min(2.0, args.sleep * (attempt + 1)))
+            if not robots_policy.can_fetch(url):
+                status = "disallowed"
+                error = "URL disallowed by robots.txt or robots policy unavailable."
+            else:
+                attempt = 0
+                while attempt <= args.retries:
+                    try:
+                        resp = session.get(url, timeout=args.timeout)
+                        code = resp.status_code
+                        resp.raise_for_status()
+                        html = resp.text
+                        content_hash = hashlib.sha256(html.encode("utf-8")).hexdigest()
+                        html_path.write_text(html, encoding="utf-8")
+                        status = "ok"
+                        error = None
+                        break
+                    except requests.RequestException as exc:
+                        status = "error"
+                        error = str(exc)
+                        attempt += 1
+                        if attempt <= args.retries:
+                            time.sleep(min(2.0, args.sleep * (attempt + 1)))
 
             if status == "ok":
                 ok_count += 1

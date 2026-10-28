@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 import sys
 import time
@@ -13,12 +14,15 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from common.branding import get_branding  # noqa: E402
 
 BRAND = get_branding()
+logger = logging.getLogger(__name__)
 
 # ── Config ────────────────────────────────────────────────────────────────────
 _raw_url = os.getenv("RAG_API_URL", "http://localhost:8000/chat").rstrip("/")
 API_BASE = _raw_url[:-5] if _raw_url.endswith("/chat") else _raw_url
 CHAT_URL   = f"{API_BASE}/chat"
 STREAM_URL = f"{API_BASE}/chat/stream"
+API_KEY = os.getenv("API_KEY", "").strip()
+API_HEADERS = {"Authorization": f"Bearer {API_KEY}"} if API_KEY else {}
 
 ICON_PATH = BRAND.icon_path
 SUGGESTED_QUESTIONS = BRAND.suggested_questions
@@ -157,6 +161,7 @@ if (
             with requests.post(
                 STREAM_URL,
                 json={"question": current_question},
+                headers=API_HEADERS,
                 stream=True,
                 timeout=(10, 900),
             ) as resp:
@@ -166,7 +171,8 @@ if (
                         continue
                     try:
                         event = json.loads(raw_line)
-                    except Exception:
+                    except json.JSONDecodeError:
+                        logger.warning("Ignoring malformed event from chat stream.")
                         continue
 
                     etype = event.get("type")
@@ -190,12 +196,13 @@ if (
                     elif etype == "options":
                         answer_options = event.get("answer_options", [])
 
-        except Exception:
-            # Fallback to non-streaming endpoint on any error
+        except requests.RequestException:
+            logger.warning("Streaming chat request failed; trying the non-streaming endpoint.", exc_info=True)
             try:
                 r = requests.post(
                     CHAT_URL,
                     json={"question": current_question},
+                    headers=API_HEADERS,
                     timeout=900,
                 )
                 r.raise_for_status()
@@ -204,11 +211,10 @@ if (
                 citations = d.get("citations", [])
                 clarification_questions = d.get("clarification_questions", [])
                 answer_options = d.get("answer_options", [])
-            except Exception:
-                final_answer = (
-                    "I'm having trouble reaching the knowledge base right now. "
-                    "Please try again in a moment."
-                )
+            except requests.RequestException:
+                logger.exception("Non-streaming chat request also failed.")
+                final_answer = "The knowledge base is unavailable. Check the API logs and try again."
+                st.error(final_answer)
 
         status_placeholder.empty()
         display = final_answer or accumulated
@@ -234,12 +240,15 @@ if (
         st.rerun()
 
 # ── "Powered by local AI" badge ───────────────────────────────────────────────
+privacy_notice = (
+    "🔒 Local inference &nbsp;·&nbsp; Web search sends queries externally"
+    if os.getenv("WEB_SEARCH_ENABLED", "false").lower() == "true"
+    else "🔒 Local inference &nbsp;·&nbsp; Web search disabled"
+)
 st.markdown(
-    "<div style='position:fixed;bottom:64px;right:20px;font-size:0.72em;"
-    "color:#999;background:rgba(255,255,255,0.9);padding:4px 12px;"
-    "border-radius:12px;border:1px solid #eee;"
-    "backdrop-filter:blur(4px);pointer-events:none;'>"
-    "🔒 Powered by local AI &nbsp;·&nbsp; No data leaves this machine"
-    "</div>",
+    f"<div style='position:fixed;bottom:64px;right:20px;font-size:0.72em;"
+    f"color:#999;background:rgba(255,255,255,0.9);padding:4px 12px;"
+    f"border-radius:12px;border:1px solid #eee;"
+    f"backdrop-filter:blur(4px);pointer-events:none;'>{privacy_notice}</div>",
     unsafe_allow_html=True,
 )

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import logging
 import os
 import sys
 from collections import deque
@@ -11,6 +12,9 @@ from bs4 import BeautifulSoup
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from common.branding import get_branding  # noqa: E402
+from ingest.robots import RobotsPolicy  # noqa: E402
+
+logger = logging.getLogger(__name__)
 
 
 def kb_path_of(kb_root: str) -> str:
@@ -18,9 +22,22 @@ def kb_path_of(kb_root: str) -> str:
     return urlparse(kb_root).path.rstrip("/") or ""
 
 
-def fetch_sitemap_urls(base_url: str, timeout: int = 20) -> list[str]:
+def fetch_sitemap_urls(
+    base_url: str,
+    timeout: int = 20,
+    robots_policy: RobotsPolicy | None = None,
+) -> list[str]:
+    if robots_policy is not None:
+        return robots_policy.sitemaps(base_url)
+
     robots_url = urljoin(base_url, "/robots.txt")
-    resp = requests.get(robots_url, timeout=timeout)
+    resp = requests.get(
+        robots_url,
+        headers={"User-Agent": get_branding().user_agent},
+        timeout=timeout,
+    )
+    if resp.status_code == 404:
+        return []
     resp.raise_for_status()
 
     sitemap_urls: list[str] = []
@@ -43,19 +60,27 @@ def discover_from_sitemaps(
     kb_path: str,
     timeout: int = 20,
     max_sitemaps: int = 250,
+    robots_policy: RobotsPolicy | None = None,
 ) -> set[str]:
     discovered: set[str] = set()
-    queue = deque(fetch_sitemap_urls(base_url, timeout=timeout))
+    queue = deque(fetch_sitemap_urls(base_url, timeout=timeout, robots_policy=robots_policy))
     seen = set(queue)
     processed = 0
 
     while queue and processed < max_sitemaps:
         sitemap_url = queue.popleft()
         processed += 1
+        if robots_policy and not robots_policy.can_fetch(sitemap_url):
+            continue
         try:
-            resp = requests.get(sitemap_url, timeout=timeout)
+            resp = requests.get(
+                sitemap_url,
+                headers={"User-Agent": get_branding().user_agent},
+                timeout=timeout,
+            )
             resp.raise_for_status()
-        except Exception:
+        except requests.RequestException as exc:
+            logger.warning("Unable to fetch sitemap %s: %s", sitemap_url, exc)
             continue
 
         links = parse_xml_links(resp.text)
@@ -71,7 +96,9 @@ def discover_from_sitemaps(
             continue
 
         for link in links:
-            if f"{kb_path}/" in link:
+            if f"{kb_path}/" in link and (
+                robots_policy is None or robots_policy.can_fetch(link)
+            ):
                 discovered.add(link)
 
     print(f"Sitemap traversal processed: {processed}")
@@ -85,6 +112,7 @@ def discover_from_kb_pages(
     max_pages: int = 120,
     article_segment: str = "detail",
     listing_segment: str = "product",
+    robots_policy: RobotsPolicy | None = None,
 ) -> set[str]:
     kb_path = kb_path_of(kb_root)
     to_visit = deque([kb_root])
@@ -93,10 +121,17 @@ def discover_from_kb_pages(
 
     while to_visit and len(seen) <= max_pages:
         url = to_visit.popleft()
+        if robots_policy and not robots_policy.can_fetch(url):
+            continue
         try:
-            resp = requests.get(url, timeout=timeout)
+            resp = requests.get(
+                url,
+                headers={"User-Agent": get_branding().user_agent},
+                timeout=timeout,
+            )
             resp.raise_for_status()
-        except Exception:
+        except requests.RequestException as exc:
+            logger.warning("Unable to fetch knowledge-base page %s: %s", url, exc)
             continue
 
         soup = BeautifulSoup(resp.text, "html.parser")
@@ -138,11 +173,13 @@ def main() -> None:
     if not args.base_url or not args.kb_root:
         parser.error("set KB_BASE_URL and KB_ROOT_URL in .env, or pass --base-url and --kb-root")
 
+    robots_policy = RobotsPolicy(brand.user_agent, timeout=args.timeout)
     from_sitemaps = discover_from_sitemaps(
         args.base_url,
         kb_path_of(args.kb_root),
         timeout=args.timeout,
         max_sitemaps=args.max_sitemaps,
+        robots_policy=robots_policy,
     )
     print(f"KB URLs from sitemap sources: {len(from_sitemaps)}")
 
@@ -152,6 +189,7 @@ def main() -> None:
         max_pages=args.max_kb_pages,
         article_segment=args.article_segment,
         listing_segment=args.listing_segment,
+        robots_policy=robots_policy,
     )
     print(f"KB URLs from page traversal: {len(from_kb_pages)}")
 

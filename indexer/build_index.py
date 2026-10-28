@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
+import os
 import re
 from pathlib import Path
 
@@ -52,6 +54,19 @@ def chunk_text(text: str, chunk_tokens: int, overlap_tokens: int) -> list[str]:
     return chunks
 
 
+def chunk_identifier(article_id: str, heading: str, chunk_index: int) -> str:
+    heading_id = hashlib.sha256(heading.encode("utf-8")).hexdigest()[:12]
+    return f"{article_id}_{heading_id}_{chunk_index}"
+
+
+def sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with open(path, "rb") as source:
+        for block in iter(lambda: source.read(1024 * 1024), b""):
+            digest.update(block)
+    return digest.hexdigest()
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Build embeddings + FAISS index from extracted articles")
     parser.add_argument("--articles", required=True)
@@ -83,7 +98,7 @@ def main() -> None:
             for chunk_idx, chunk in enumerate(
                 chunk_text(section_text, args.chunk_tokens, args.overlap_tokens)
             ):
-                chunk_id = f"{rec['article_id']}_{abs(hash(section_heading))}_{chunk_idx}"
+                chunk_id = chunk_identifier(rec["article_id"], section_heading, chunk_idx)
                 chunks.append(
                     {
                         "chunk_id": chunk_id,
@@ -113,24 +128,53 @@ def main() -> None:
     index = faiss.IndexFlatIP(dim)
     index.add(vectors)
 
-    faiss.write_index(index, str(out_dir / "faiss.index"))
-    np.save(out_dir / "embeddings.npy", vectors)
+    index_tmp = out_dir / "faiss.index.tmp"
+    faiss.write_index(index, str(index_tmp))
+    os.replace(index_tmp, out_dir / "faiss.index")
 
-    with open(out_dir / "chunks.jsonl", "w", encoding="utf-8") as f:
+    embeddings_tmp = out_dir / "embeddings.npy.tmp"
+    with open(embeddings_tmp, "wb") as f:
+        np.save(f, vectors)
+    os.replace(embeddings_tmp, out_dir / "embeddings.npy")
+
+    chunks_tmp = out_dir / "chunks.jsonl.tmp"
+    with open(chunks_tmp, "w", encoding="utf-8") as f:
         for c in chunks:
             f.write(json.dumps(c, ensure_ascii=False) + "\n")
+    os.replace(chunks_tmp, out_dir / "chunks.jsonl")
 
     manifest = {
+        "index_version": 1,
         "embedding_model": args.embedding_model,
         "total_articles": len(records),
         "total_chunks": len(chunks),
         "chunk_tokens": args.chunk_tokens,
         "overlap_tokens": args.overlap_tokens,
         "faiss_metric": "inner_product_cosine",
+        "index_id": hashlib.sha256(
+            json.dumps(
+                {
+                    "articles": [
+                        rec.get("content_hash")
+                        or hashlib.sha256(rec["text"].encode("utf-8")).hexdigest()
+                        for rec in records
+                    ],
+                    "embedding_model": args.embedding_model,
+                    "chunk_tokens": args.chunk_tokens,
+                    "overlap_tokens": args.overlap_tokens,
+                },
+                sort_keys=True,
+            ).encode("utf-8")
+        ).hexdigest(),
+        "files": {
+            "faiss.index": sha256_file(out_dir / "faiss.index"),
+            "chunks.jsonl": sha256_file(out_dir / "chunks.jsonl"),
+            "embeddings.npy": sha256_file(out_dir / "embeddings.npy"),
+        },
     }
-    (out_dir / "manifest.json").write_text(
-        json.dumps(manifest, indent=2, ensure_ascii=False), encoding="utf-8"
-    )
+    manifest_tmp = out_dir / "manifest.json.tmp"
+    manifest_tmp.write_text(json.dumps(manifest, indent=2, ensure_ascii=False), encoding="utf-8")
+    os.replace(manifest_tmp, out_dir / "manifest.json")
 
     print(f"Indexed articles: {len(records)}")
     print(f"Generated chunks: {len(chunks)}")

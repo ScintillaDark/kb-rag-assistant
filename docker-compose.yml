@@ -1,13 +1,23 @@
 services:
   ollama:
-    image: ollama/ollama:latest
+    image: ollama/ollama:${OLLAMA_VERSION:-0.40.12}
     volumes:
       - ollama:/root/.ollama
     ports:
-      - "11434:11434"
+      - "${HOST_BIND_ADDRESS:-127.0.0.1}:11434:11434"
+    healthcheck:
+      test: ["CMD", "ollama", "list"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
 
   api:
-    build: .
+    build:
+      context: .
+      args:
+        APP_UID: ${APP_UID:-1000}
+        APP_GID: ${APP_GID:-1000}
     env_file:
       - path: .env
         required: false
@@ -17,12 +27,31 @@ services:
     volumes:
       - ./data:/app/data
     ports:
-      - "8000:8000"
+      - "${HOST_BIND_ADDRESS:-127.0.0.1}:8000:8000"
     depends_on:
-      - ollama
+      ollama:
+        condition: service_healthy
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health/ready', timeout=4)"
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 90s
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
 
   ui:
-    build: .
+    build:
+      context: .
+      args:
+        APP_UID: ${APP_UID:-1000}
+        APP_GID: ${APP_GID:-1000}
     command: ["python", "-m", "streamlit", "run", "ui/chat_app.py", "--server.headless", "true", "--server.address", "0.0.0.0", "--server.port", "8501"]
     env_file:
       - path: .env
@@ -30,9 +59,14 @@ services:
     environment:
       RAG_API_URL: http://api:8000/chat
     ports:
-      - "8501:8501"
+      - "${HOST_BIND_ADDRESS:-127.0.0.1}:8501:8501"
     depends_on:
-      - api
+      api:
+        condition: service_healthy
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
 
 volumes:
   ollama:

@@ -1,6 +1,20 @@
-{"id":"q1","question":"How do I get started with the assistant?","category":"easy"}
-{"id":"q2","question":"Which environment variable sets the application name?","category":"easy"}
-{"id":"q3","question":"How do I index my own Markdown documents?","category":"medium"}
-{"id":"q4","question":"What should I do if answers are very slow?","category":"medium"}
-{"id":"q5","question":"Does the assistant send my documents to an external service?","category":"easy"}
-{"id":"q6","question":"What is the capital of Australia?","category":"out_of_scope"}
+{"id":"start-01","question":"Which commands install dependencies and start the assistant?","expected_outcome":"answer","expected_sources":["getting-started"],"answer_contains":["pip install -r requirements.txt","make run"]}
+{"id":"start-02","question":"How much free memory does the getting started guide recommend?","expected_outcome":"answer","expected_sources":["getting-started"],"answer_contains":["8 GB"]}
+{"id":"start-03","question":"Does the default setup send questions to an external search provider?","expected_outcome":"answer","expected_sources":["getting-started"],"answer_contains":["web search"]}
+{"id":"architecture-01","question":"Which vector index and embedding library does the architecture use?","expected_outcome":"answer","expected_sources":["architecture"],"answer_contains":["FAISS","sentence-transformers"]}
+{"id":"architecture-02","question":"Which service retrieves passages and streams responses from Ollama?","expected_outcome":"answer","expected_sources":["architecture"],"answer_contains":["FastAPI","Ollama"]}
+{"id":"architecture-03","question":"How does the architecture describe storing and serving the document index?","expected_outcome":"answer","expected_sources":["architecture"],"answer_contains":["FAISS"]}
+{"id":"config-01","question":"Which settings configure the embedding model and retrieval count?","expected_outcome":"answer","expected_sources":["configuration"],"answer_contains":["RAG_TOP_K","RAG_EMBEDDING_MODEL"]}
+{"id":"config-02","question":"How can I change the application name and logo?","expected_outcome":"answer","expected_sources":["configuration"],"answer_contains":["APP_NAME","APP_LOGO_PATH"]}
+{"id":"config-03","question":"Which environment variables enable web search and the scope guardrail?","expected_outcome":"answer","expected_sources":["configuration"],"answer_contains":["WEB_SEARCH_ENABLED","GUARDRAIL_ENABLED"]}
+{"id":"index-01","question":"How do I build an index from a folder of Markdown files?","expected_outcome":"answer","expected_sources":["indexing"],"answer_contains":["build_sample_corpus.py","build_index.py"]}
+{"id":"index-02","question":"How does the crawler discover articles on a documentation website?","expected_outcome":"answer","expected_sources":["indexing"],"answer_contains":["sitemap"]}
+{"id":"index-03","question":"How many words overlap between adjacent default chunks?","expected_outcome":"answer","expected_sources":["indexing"],"answer_contains":["100"]}
+{"id":"troubleshoot-01","question":"What can improve slow CPU-only answer generation?","expected_outcome":"answer","expected_sources":["troubleshooting"],"answer_contains":["smaller model"]}
+{"id":"troubleshoot-02","question":"What should I check when the Ollama connection fails?","expected_outcome":"answer","expected_sources":["troubleshooting"],"answer_contains":["ollama list"]}
+{"id":"troubleshoot-03","question":"What does a low evidence score mean and how can I respond?","expected_outcome":"answer","expected_sources":["troubleshooting"],"answer_contains":["threshold"]}
+{"id":"out-of-scope-01","question":"What is the capital city of Australia?","expected_outcome":"abstain","expected_sources":[],"answer_contains":[]}
+{"id":"out-of-scope-02","question":"Give me a recipe for a chocolate cake.","expected_outcome":"abstain","expected_sources":[],"answer_contains":[]}
+{"id":"out-of-scope-03","question":"Who won the most recent championship final?","expected_outcome":"abstain","expected_sources":[],"answer_contains":[]}
+{"id":"out-of-scope-04","question":"Recommend a vacation destination for next summer.","expected_outcome":"abstain","expected_sources":[],"answer_contains":[]}
+{"id":"out-of-scope-05","question":"Explain how to train for a marathon safely.","expected_outcome":"abstain","expected_sources":[],"answer_contains":[]}

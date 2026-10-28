@@ -9,6 +9,7 @@ git clone https://github.com/ScintillaDark/kb-rag-assistant.git
 cd kb-rag-assistant
 make install-dev
 make sample
+# Set API_KEY in .env before starting the app.
 ```
 
 ## Workflow
@@ -16,7 +17,7 @@ make sample
 1. Open an issue (or comment on an existing one) before starting larger changes.
 2. Create a branch from `main`: `git checkout -b feature/short-description`.
 3. Keep changes focused; add or update tests in `tests/` and docs where behaviour changes.
-4. Run `make lint` and `make test` before pushing.
+4. Run `make lint`, `make test`, and `pip-audit -r requirements.txt -r requirements-dev.txt` before pushing.
 5. Open a pull request using the template. CI must pass.
 
 ## Guidelines

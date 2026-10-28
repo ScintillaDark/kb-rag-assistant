@@ -1,7 +1,7 @@
 # Getting Started with KnowledgeBase Assistant
 
 ## Overview
-KnowledgeBase Assistant is a local-first question answering system. It indexes a set of documents once, then answers questions by retrieving the most relevant passages and passing them to a language model that runs on your own machine through Ollama. Nothing is sent to an external service at question time.
+KnowledgeBase Assistant is a local-first question answering system. It indexes a set of documents once, then answers questions by retrieving the most relevant passages and passing them to a language model that runs on your own machine through Ollama. By default, question-time inference is local. If optional web search is enabled, the search query is sent to the configured web-search provider.
 
 ## Requirements
 You need Python 3.9 or newer, about 8 GB of free memory for a small model, and Ollama installed and running. A GPU is optional. Without a GPU, answers are generated on the CPU and may take from a few seconds to a few minutes depending on the model size.

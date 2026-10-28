@@ -36,7 +36,9 @@ st.caption(f"Architecture, tools, and design decisions behind {BRAND.app_name}."
 st.header("Architecture")
 st.markdown("""
 The chatbot is a **local-first Retrieval-Augmented Generation (RAG)** system.
-All inference happens on-device — no data leaves the machine.
+By default, embeddings and LLM inference run locally. Website crawling contacts
+the configured source, and enabling web search sends a user's query to the
+configured search provider.
 
 ```
 User question
@@ -125,7 +127,7 @@ with col_r2:
 
 st.subheader("Safety behaviour")
 st.markdown("""
-- On **classifier timeout or any error** the question is **allowed through** — the guardrail never silently drops a legitimate question.
+- On **classifier timeout or any error** the question is allowed through. The optional classifier is a topic filter, not an authorization or security boundary.
 - Rejected questions receive a friendly, category-specific message; the RAG pipeline is never called.
 - The API response includes `guardrail_blocked: bool` and `guardrail_category` fields for observability.
 """)
@@ -188,25 +190,27 @@ with col_b:
 | Default model | `gemma4:latest` |
 | Temperature | 0.1 |
 | Top-p | 0.9 |
-| Ollama call timeout | 300 s |
-| UI request timeout | 360 s |
-| Auto-retry attempts | 4 (delays: 2 s, 4 s, 8 s, 12 s) |
+| Ollama call timeout | 600 s |
+| UI request timeout | 900 s |
+| Stream fallback | One non-streaming retry after a streaming request error |
     """)
 
-st.subheader("KB-First Fallback Strategy")
+st.subheader("Evidence and fallback strategy")
 st.markdown("""
 1. Retrieve the top-k chunks from the FAISS index.
 2. If **good hits** (score ≥ threshold) exist → build a grounded prompt from those chunks.
-3. If **no good hits** → build a general-knowledge prompt and let the model answer from its own training data.
-4. Either way the model is instructed **not to embed citations** in the answer text — citations are returned separately and shown as collapsible *References*.
+3. If evidence is weak → abstain, unless optional web search returns sources.
+4. Retrieved knowledge-base and web text is marked as untrusted input in the prompt; this is a mitigation, not a guarantee against prompt injection.
+5. Citations are returned separately and shown as collapsible *References*.
 """)
 
 st.subheader("Response Cache")
 st.markdown("""
-- In-memory LRU cache keyed on: `format_version | model | embedding_model | top_k | threshold | question`
+- In-process LRU cache keyed on: `format_version | model | embedding_model | top_k | threshold | min_sources | web_search | question`
 - TTL: **900 s** (15 min)
 - Max entries: **128**
 - Cache key includes a format-version string so any prompt change auto-invalidates stale entries.
+- Cache is not shared between multiple API workers or replicas.
 """)
 
 # ── Tech Stack ────────────────────────────────────────────────────────────────
@@ -216,7 +220,7 @@ stack = {
     "FastAPI": "REST API runtime (`runtime/app.py`)",
     "Uvicorn": "ASGI server hosting FastAPI",
     "Streamlit 1.48": "Chat UI (`ui/chat_app.py`)",
-    "FAISS (faiss-cpu)": "Approximate nearest-neighbour vector search",
+    "FAISS (faiss-cpu)": "Exact flat inner-product search over normalized embeddings",
     "SentenceTransformers": "Text embedding (`all-MiniLM-L6-v2`)",
     "Ollama": "Local LLM inference server",
     "trafilatura": "Web article extraction from raw HTML",
