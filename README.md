@@ -91,15 +91,22 @@ All settings live in `.env` (see [.env.example](.env.example) for the full list)
 
 ## Architecture
 
+```mermaid
+flowchart LR
+    Question[Question] --> UI[Streamlit UI]
+    UI -->|Bearer key| API[FastAPI]
+    API --> Guard{Optional guardrail}
+    Guard --> RAG[RAG service]
+    RAG --> Index[(FAISS index)]
+    RAG -->|weak evidence| Web[Optional web search]
+    Index --> Prompt[Grounded prompt]
+    Web --> Prompt
+    Prompt --> Ollama[Ollama]
+    Ollama -->|NDJSON tokens| API
+    API -->|Answer and citations| UI
 ```
-Question ─► Streamlit UI ─► FastAPI (bearer key / limits) ─► [optional guardrail]
-                                                               │
-                       ┌──────── web search (opt-in) ◄── weak evidence?
-                       │                                       │
-                       └──────────────────► FAISS retrieval ─► Ollama
-                                               │                 │
-                     Answer + evidence citations ◄── NDJSON stream
-```
+
+See [System Diagrams](docs/DIAGRAMS.md), [Architecture](docs/ARCHITECTURE.md), [API Reference](docs/API.md), and [Operations](docs/OPERATIONS.md). The implementation rationale and production boundary are documented in [IMPLEMENTATION_PLAN.md](IMPLEMENTATION_PLAN.md).
 
 | Folder | Purpose |
 |--------|---------|
