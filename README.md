@@ -133,6 +133,8 @@ Send an `Authorization: Bearer <API_KEY>` header to both chat endpoints. `/docs`
 
 The project is suitable as a local-first showcase and a self-hosted starting point. Before serving untrusted users or sensitive corpora, add an identity provider and per-user authorization, a durable distributed rate limiter/queue, backups and index rollback, alerting, and a deployment-specific threat review. The optional LLM scope classifier is a topic filter—not an authorization control—and fails open if the classifier errors. Retrieved content is marked untrusted in prompts, but prompt-injection defenses are not guarantees.
 
+See [Production Readiness Gaps](PRODUCTION_READINESS_GAPS.md) for the detailed gap assessment and recommended remediation roadmap.
+
 ## Performance notes
 
 CPU performance depends on the selected model and hardware. Use a smaller model (`OLLAMA_MODEL`), keep `OLLAMA_THINK=false`, and consider `make warm` before a demo.
