@@ -135,6 +135,8 @@ The project is suitable as a local-first showcase and a self-hosted starting poi
 
 See [Production Readiness Gaps](PRODUCTION_READINESS_GAPS.md) for the detailed gap assessment and recommended remediation roadmap.
 
+For the target AWS production architecture, including Bedrock model routing, Managed Knowledge Bases, guardrails, 10,000-concurrent-user scaling, evaluation gates, and deployment phases, see [Production Architecture Plan](PRODUCTION_ARCHITECTURE.md).
+
 ## Performance notes
 
 CPU performance depends on the selected model and hardware. Use a smaller model (`OLLAMA_MODEL`), keep `OLLAMA_THINK=false`, and consider `make warm` before a demo.
