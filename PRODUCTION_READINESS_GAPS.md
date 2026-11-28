@@ -4,15 +4,17 @@
 
 **Current status: suitable for local demonstrations and trusted private use; not ready for an internet-facing or multi-user production deployment.**
 
-The application has several production-oriented capabilities: non-root containers, loopback Docker bindings, bearer authentication, request IDs, rate limiting, a generation semaphore, readiness checks, index checksums, test coverage, linting, dependency auditing, and CodeQL scanning. However, these controls do not constitute a complete production platform.
+The application has several production-oriented local capabilities: non-root containers, loopback Docker bindings, shared-key authentication, request IDs, process-local rate limiting and generation limits, readiness checks, index checksums, tests, linting, dependency auditing, and CodeQL scanning. The latest implementation also adds validated environment settings and an application factory with injectable service/guardrail dependencies. This is only a local composition foundation: staging and production deliberately fail closed, and no production adapters or deployment have been implemented.
 
-The main blockers are identity and authorization, distributed operational controls, durable ingestion and storage, production observability, security hardening around external access, resilience guarantees, and evidence-based quality gates.
+The main blockers remain identity and authorization, complete environment-specific adapters, dense-plus-BM25 retrieval and reranking, distributed operational controls, durable ingestion and storage, production observability, security hardening around external access, resilience guarantees, and evidence-based quality gates.
 
 ## 2. What is already implemented
 
 | Area | Existing implementation |
 |---|---|
+| Configuration and composition | Frozen validated settings, FastAPI app factory, injected local service/guardrail factories, and test fakes; staging/production app creation is rejected |
 | Local RAG | Sentence-transformer embeddings, FAISS retrieval, and local Ollama generation |
+| Retrieval quality | Dense FAISS retrieval and local thresholds; no BM25/exact-match branch, rank fusion, or reranker |
 | Grounding | Retrieval thresholds, source minimums, prompt source boundaries, and abstention |
 | API authentication | Shared bearer-key validation on chat endpoints |
 | API capacity | Per-IP in-process rate limiting and bounded concurrent generation |
@@ -28,6 +30,7 @@ The main blockers are identity and authorization, distributed operational contro
 
 | Priority | Gap | Why it blocks production | Recommended control |
 |---|---|---|---|
+| Critical | No production adapters or complete environment-specific composition | The application factory intentionally rejects staging/production; the RAG internals still use local implementations | Extract and contract-test required ports, then compose only approved identity, retrieval, generation, storage, safety, and distributed-control adapters per environment |
 | Critical | No end-user identity or document authorization | Anyone possessing the shared key is trusted as the same principal | Add OIDC, per-user sessions, roles, and tenant/document ACLs |
 | Critical | Shared API key is only a process credential | It cannot provide isolation, audit attribution, revocation per user, or least privilege | Replace or augment the key with authenticated API sessions and scoped service credentials |
 | Critical | No TLS termination or secure public ingress | API traffic and bearer credentials may be exposed | Deploy behind authenticated HTTPS ingress and a trusted reverse proxy |
@@ -37,6 +40,7 @@ The main blockers are identity and authorization, distributed operational contro
 | High | Process-local cache | Cache entries are lost on restart and not shared across replicas | Use Redis or a bounded external cache with invalidation/versioning |
 | High | Limited durability and rollback | Index and article replacement can be interrupted and lack formal backup/restore drills | Define atomic promotion, snapshots, versioned indexes, retention, and rollback |
 | High | Limited observability | Request logs omit operational correlation beyond request IDs and aggregate metrics are absent | Add structured logs, metrics, traces, dashboards, SLOs, and alerts |
+| High | No hybrid retrieval, exact-match channel, or reranker | Dense-only retrieval can miss exact identifiers and no measured reranking improves candidate ordering | Implement dense + BM25/exact-identifier retrieval, rank fusion, reranking, and per-channel/fused quality gates |
 | High | No isolated secrets manager | `.env` is local configuration and can be copied or mismanaged | Integrate a secret store and managed key rotation |
 | High | Web search is unaudited and provider-dependent | Queries leave the machine and provider behavior/availability can change | Add consent, policy controls, provider allowlisting, timeouts, budgets, and audit policy |
 | High | Guardrail is a topic filter, not security enforcement | It fails open and can be bypassed through paraphrase or injection | Do not use it as authorization; add server-side policy and input/output safeguards |
@@ -53,7 +57,7 @@ The main blockers are identity and authorization, distributed operational contro
 
 ### 4.1 Identity, authorization, and isolation
 
-The API validates a shared credential in [runtime/app.py](runtime/app.py#L82). The key is required for chat endpoints, but it does not represent a user or tenant.
+The API validates a shared credential in [runtime/app.py](runtime/app.py). The key is required for chat endpoints, but it does not represent a user or tenant.
 
 There is no:
 
@@ -94,7 +98,7 @@ The key is loaded from environment configuration. It is not stored in a secret m
 
 ### 4.4 Process-local rate limiting and capacity
 
-Rate limits use an in-memory ordered dictionary in [runtime/app.py](runtime/app.py#L42). The generation semaphore is also process-local.
+Rate limits use an in-memory ordered dictionary in [runtime/app.py](runtime/app.py). The generation semaphore is also process-local.
 
 Consequences:
 
@@ -164,7 +168,7 @@ The application does not maintain a formal privacy or provenance inventory for:
 
 ### 4.8 Guardrails and prompt safety
 
-The scope guardrail uses an LLM to classify input in [runtime/guardrail.py](runtime/guardrail.py#L125). It fails open on classifier or provider errors.
+The scope guardrail uses an LLM to classify input in [runtime/guardrail.py](runtime/guardrail.py). It fails open on classifier or provider errors.
 
 Retrieved text is marked untrusted in the RAG prompt, and answers are resolved from retrieved sources, but prompt injection remains possible. The guardrail is not authorization.
 
@@ -198,7 +202,7 @@ No high availability controls are provided for:
 
 ### 4.10 Observability
 
-The middleware adds a request ID and structured HTTP timing logs in [runtime/app.py](runtime/app.py#L129). It does not collect a production metrics and tracing contract.
+The middleware adds a request ID and structured HTTP timing logs in [runtime/app.py](runtime/app.py). It does not collect a production metrics and tracing contract.
 
 Missing telemetry includes:
 
@@ -229,6 +233,8 @@ The evaluation runner measures:
 
 These are useful heuristic checks. Gaps remain:
 
+- no BM25/exact-identifier retrieval, dense/lexical rank fusion, or reranker implementation;
+- no channel ablations or exact-identifier recall gate;
 - no human-verified broad evaluation set;
 - no faithfulness or hallucination judge accepted as a release gate;
 - no per-domain, long-document, or paraphrase split;
@@ -236,10 +242,11 @@ These are useful heuristic checks. Gaps remain:
 - no live non-synthetic quality benchmark;
 - no cost or token budget metrics;
 - no model-size hardware matrix;
-- no automation evidence that evaluation thresholds block deployment.
-- no statistical confidence or drift monitoring.
+- no automation evidence that evaluation thresholds block deployment;
+- no statistical confidence or drift monitoring;
+- no required per-slice Recall@K, Precision@K, MRR, MAP, NDCG, fusion/reranker uplift, or ACL-parity gate.
 
-**Required for production:** a consented and sanitized golden set, source/answer provenance review, human adjudication, retrieval and answer-quality thresholds, adversarial cases, regression automation, and periodic re-evaluation.
+**Required for production:** a consented and sanitized golden set, source/answer provenance review, human adjudication, dense and BM25/exact-match channel metrics, rank-fusion and reranker ablations, retrieval and answer-quality thresholds, adversarial cases, confidence intervals, regression automation, and periodic re-evaluation. Retrieval should be measured per slice with at least Recall@K, Precision@K, MRR, MAP, NDCG, exact-identifier recall, unauthorized retrieval rate, and latency; answer evaluation should include citation precision/recall, supported-claim coverage, unsupported-claim rate, abstention quality, and human review. A judge model may support review but is not proof of truth or a replacement for human adjudication.
 
 ### 4.12 Testing and CI
 
@@ -256,7 +263,8 @@ The repository includes unit tests and CI for Python 3.10-3.12, lint, dependency
 - deployment smoke tests;
 - database/storage migration rollback tests;
 - failure injection;
-- evaluation thresholds as a deployment gate.
+- evaluation thresholds as a deployment gate;
+- settings validation, injected dependency, startup/shutdown, and fail-closed environment contract coverage for each production adapter.
 
 **Required for production:** staged quality gates for unit, integration, end-to-end, load, security, evaluation, and deployment smoke checks.
 
@@ -274,11 +282,25 @@ The Docker image is non-root, and Compose drops capabilities. It does not provid
 - migration gates;
 - health/readiness deployment integration;
 - resource requests/limits;
-- pod disruption or multi-zone behavior.
+- pod disruption or multi-zone behavior;
+- a staging/production composition root or production service adapters.
 
 **Required for production:** a deployment target with immutable releases, supply-chain attestations, resource controls, rollout strategy, health checks, and rollback.
 
-### 4.14 Data and model lifecycle
+### 4.14 Environment-aware composition and dependency injection
+
+The current code now has a frozen, validated settings object, a FastAPI application factory, and injection points for the RAG service and guardrail. Local factories construct the existing local stack; tests can inject fakes. The application rejects `staging` and `production` rather than silently selecting local providers. This is a safe foundation, not a production environment.
+
+Remaining gaps:
+
+- the main RAG service still combines retrieval, generation, cache, citation, and policy behavior rather than depending on independently replaceable ports;
+- no production implementations exist for identity/authorization, retrieval, generation, durable storage/ingestion, distributed cache/capacity, or production guardrails/telemetry;
+- production dependency lifecycle, startup/readiness checks, shutdown cleanup, and adapter contract tests are not established;
+- the local shared key, FAISS/Ollama dependencies, process-local limits, and cache must not become production fallbacks.
+
+**Required:** complete the ports-and-adapters refactor incrementally, preserve the local behavior behind local adapters, add explicit production composition only when its required adapters and settings are present, and test both successful local composition and fail-closed production behavior. Keep provider selection in composition roots rather than branching on environment throughout business logic.
+
+### 4.15 Data and model lifecycle
 
 The embedding model and answer model are configurable, but no complete lifecycle policy exists.
 
@@ -306,15 +328,18 @@ The application should not be called production-ready until it has:
 6. Secret-manager integration and credential rotation.
 7. Structured metrics, logs, traces, dashboards, alert thresholds, and incident runbooks.
 8. Prompt-injection and data-exfiltration threat tests.
-9. A consented, representative evaluation set with blocking quality thresholds.
+9. A consented, representative evaluation set with blocking dense/BM25 retrieval, rank-fusion, reranker, answer-grounding, and safety thresholds.
 10. Load, failover, concurrency, and streaming reliability tests.
 11. Signed and scanned container releases with pinned dependencies and SBOMs.
 12. Deployment rollout, rollback, backup, incident, and on-call procedures.
+13. Environment-specific composition and adapter contract tests, with no silent local or fail-open fallback in staging/production.
 
 ## 6. Recommended implementation roadmap
 
 ### Phase 1: Security and trust boundary
 
+- Retain the completed local composition foundation: validated settings, an application factory, injected local service/guardrail factories, and test fakes. Staging and production remain intentionally unavailable until production adapters exist.
+- Finish extracting local retrieval, generation, cache, storage, authorization, and telemetry responsibilities behind explicit ports while preserving the local API behavior.
 - Add OIDC or another supported identity provider.
 - Move authorization to server-side middleware.
 - Add tenant/document ACL checks before FAISS retrieval.
@@ -335,6 +360,7 @@ The application should not be called production-ready until it has:
 ### Phase 3: Quality and release gates
 
 - Expand the evaluation dataset across domains and failure cases.
+- Implement dense + BM25/exact-match retrieval, ranked-list fusion, and an independently evaluated reranker; gate channel and fused results using retrieval metrics and answer-support evaluation.
 - Add human answer-faithfulness review.
 - Add prompt-injection, leakage, and authorization tests.
 - Add browser, load, streaming, concurrency, and failure tests.

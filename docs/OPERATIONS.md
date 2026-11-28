@@ -12,6 +12,8 @@ make run
 make stop
 ```
 
+The API currently supports `APP_ENV=local`. `APP_ENV=test` is for tests that inject fake services. Starting with `APP_ENV=staging` or `APP_ENV=production` is intentionally rejected until the production adapters and security controls are implemented; changing this value alone does not enable a production deployment.
+
 Docker Compose uses the same environment and loopback defaults:
 
 ```bash

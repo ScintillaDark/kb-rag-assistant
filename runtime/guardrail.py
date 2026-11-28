@@ -119,10 +119,12 @@ class ScopeGuardrail:
         ollama_base_url: str = "http://localhost:11434",
         ollama_model: str = "gemma4:latest",
         timeout: int = 15,
+        think: bool | None = None,
     ) -> None:
         self.ollama_base_url = ollama_base_url.rstrip("/")
         self.ollama_model = ollama_model
         self.timeout = timeout
+        self.think = os.getenv("OLLAMA_THINK", "false").lower() == "true" if think is None else think
 
     def _classify(self, question: str) -> str:
         """Call Ollama and return the raw classification token."""
@@ -134,7 +136,7 @@ class ScopeGuardrail:
             "model": self.ollama_model,
             "prompt": prompt,
             "stream": False,
-            "think": os.getenv("OLLAMA_THINK", "false").lower() == "true",
+            "think": self.think,
             "options": {
                 "temperature": 0,
                 "num_predict": 10,   # force a very short response
@@ -183,7 +185,14 @@ def is_enabled() -> bool:
     return os.getenv("GUARDRAIL_ENABLED", "false").strip().lower() == "true"
 
 
-def build_guardrail() -> Optional[ScopeGuardrail]:
+def build_guardrail(
+    *,
+    enabled: bool | None = None,
+    ollama_base_url: str | None = None,
+    ollama_model: str | None = None,
+    timeout: int | None = None,
+    think: bool | None = None,
+) -> Optional[ScopeGuardrail]:
     """
     Construct a ScopeGuardrail if GUARDRAIL_ENABLED=true, else return None.
 
@@ -196,10 +205,19 @@ def build_guardrail() -> Optional[ScopeGuardrail]:
             if not result.allowed:
                 return {"answer": result.rejection_message, ...}
     """
-    if not is_enabled():
+    if not (is_enabled() if enabled is None else enabled):
         return None
     return ScopeGuardrail(
-        ollama_base_url=os.getenv("OLLAMA_BASE_URL", "http://localhost:11434"),
-        ollama_model=os.getenv("GUARDRAIL_MODEL", os.getenv("OLLAMA_MODEL", "gemma4:latest")),
-        timeout=int(os.getenv("GUARDRAIL_TIMEOUT", "15")),
+        ollama_base_url=(
+            os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
+            if ollama_base_url is None
+            else ollama_base_url
+        ),
+        ollama_model=(
+            os.getenv("GUARDRAIL_MODEL", os.getenv("OLLAMA_MODEL", "gemma4:latest"))
+            if ollama_model is None
+            else ollama_model
+        ),
+        timeout=timeout if timeout is not None else int(os.getenv("GUARDRAIL_TIMEOUT", "15")),
+        think=think,
     )

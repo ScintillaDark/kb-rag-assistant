@@ -24,6 +24,24 @@ def test_guardrail_disabled_by_default(monkeypatch):
     assert build_guardrail() is None
 
 
+def test_guardrail_can_be_built_from_injected_settings(monkeypatch):
+    monkeypatch.setenv("GUARDRAIL_ENABLED", "false")
+
+    guard = build_guardrail(
+        enabled=True,
+        ollama_base_url="http://configured-ollama",
+        ollama_model="configured-model",
+        timeout=7,
+        think=True,
+    )
+
+    assert guard is not None
+    assert guard.ollama_base_url == "http://configured-ollama"
+    assert guard.ollama_model == "configured-model"
+    assert guard.timeout == 7
+    assert guard.think is True
+
+
 def test_guardrail_rejects_with_generic_message(monkeypatch):
     guard = ScopeGuardrail()
     monkeypatch.setattr(guard, "_classify", lambda _q: "OUT_OF_SCOPE")

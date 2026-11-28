@@ -87,7 +87,9 @@ All settings live in `.env` (see [.env.example](.env.example) for the full list)
 | Model | `OLLAMA_BASE_URL`, `OLLAMA_MODEL`, `OLLAMA_TIMEOUT`, `OLLAMA_THINK` |
 | Optional features | `GUARDRAIL_ENABLED`, `WEB_SEARCH_ENABLED`, `RAG_CLARIFICATION_ENABLED`, `RAG_ANSWER_OPTIONS_ENABLED` |
 | API access and capacity | `API_KEY`, `API_RATE_LIMIT_PER_MINUTE`, `API_MAX_CONCURRENT_GENERATIONS` |
-| Services | `API_HOST`, `API_PORT`, `UI_PORT`, `RAG_API_URL`, `HOST_BIND_ADDRESS`, `APP_UID`, `APP_GID` |
+| Runtime and services | `APP_ENV` (`local` by default), `API_HOST`, `API_PORT`, `UI_PORT`, `RAG_API_URL`, `HOST_BIND_ADDRESS`, `APP_UID`, `APP_GID` |
+
+`APP_ENV=local` uses the local FAISS/Ollama stack. `APP_ENV=test` is reserved for tests that inject fake dependencies. `staging` and `production` currently fail closed at app creation because their AWS identity, retrieval, generation, and distributed-control adapters have not been implemented.
 
 ## Architecture
 

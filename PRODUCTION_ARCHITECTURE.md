@@ -2,17 +2,19 @@
 
 ## KnowledgeBase Assistant
 
-**Document status:** Proposed target-state architecture for production review  
+**Document status:** Target-state proposal for technical review; not deployed or production-ready
 **Scale objective:** 10,000 concurrent authenticated users  
 **Architecture style:** Local-first POC evolved into an AWS-hosted, multi-tenant RAG platform  
 **Primary inference platform:** Amazon Bedrock with application-level model routing and Guardrails  
-**Retrieval assumption:** The production ingestion pipeline already uses a selected high-quality embedding model and an evaluated reranking stage. Those capabilities are treated as implemented production enhancements, not as POC capabilities described below.
+**Production retrieval target:** Versioned dense and BM25/exact-match retrieval, rank fusion, and an independently evaluated reranking stage. None of these production retrieval capabilities is implemented in this repository.
 
-> This document separates shipped POC behavior from target-production behavior. Statements labeled **Assumed implemented** describe the production retrieval improvements requested for this plan. Statements labeled **POC** describe behavior that exists in the current repository.
+> This document separates behavior present in the repository from the proposed production platform. **POC/current** identifies implemented behavior; **target** identifies requirements that still need implementation and evidence.
 
 ## Executive summary
 
 The repository is a justified proof of concept: it demonstrates local-first RAG, FAISS retrieval, citation handling, abstention, streaming, bearer-key protection, and evaluation tooling. It is not a production architecture for 10,000 users.
+
+The current implementation has taken an initial environment-aware composition step: validated settings, a FastAPI application factory, injected local service/guardrail factories, and test fakes. `local` remains the only runnable application environment; `staging` and `production` are deliberately rejected until their adapters exist. This does not yet separate all RAG internals behind ports, nor implement AWS identity, retrieval, generation, distributed controls, or production infrastructure.
 
 The production target should preserve the POC's explicit RAG boundaries while replacing process-local components with managed, distributed AWS services:
 
@@ -37,10 +39,11 @@ The governing production constraint is Bedrock token and request capacity, not 1
 
 | POC capability | Current implementation | Production interpretation |
 |---|---|---|
+| Environment composition | Validated `Settings`, `create_app`, local service/guardrail factories, and injectable test dependencies; staging/production app creation fails closed | Extend the composition root to select fully implemented environment-specific adapters; do not allow production fallback to local providers |
 | Local embeddings | Sentence-transformers embeddings in `indexer/build_index.py` | Replace or complement with a versioned production embedding model in Bedrock |
-| Retrieval | FAISS inner-product search with similarity and source thresholds | Preserve evidence thresholds, retrieval policy, and abstention; add reranking and tenant filtering |
-| Reranking | Not implemented in the POC | **Assumed implemented** in the production retrieval pipeline |
-| Embedding quality | Small default model | **Assumed implemented**: production embedding model has been benchmarked and selected |
+| Retrieval | FAISS dense-vector search with similarity and source thresholds; no BM25/exact-match branch or rank fusion | Add dense plus BM25/exact-identifier retrieval, rank fusion, authorization filtering, and measured retrieval policy |
+| Reranking | Not implemented in the current repository | Add as a separately versioned and evaluated stage |
+| Embedding quality | Small default model; no production-corpus benchmark is present | Select and benchmark the production embedding model against an approved corpus |
 | Answer generation | One configured Ollama model | Replace with a Bedrock route supporting primary, fallback, and degraded models |
 | Guardrail | Optional heuristic LLM scope classifier | Replace as the sole control with Bedrock Guardrails plus application authorization |
 | API auth | Shared bearer key | Replace with Cognito-issued JWTs and scoped service roles |
@@ -54,20 +57,20 @@ The governing production constraint is Bedrock token and request capacity, not 1
 
 The POC is therefore a **correct reference implementation of the RAG control flow**, not a production implementation of scale, isolation, durability, or governance.
 
-### 1.2 Assumptions for this target architecture
+### 1.2 Target requirements and unverified assumptions
 
-The plan assumes:
+These are target requirements, not claims about a deployed or measured platform:
 
-- 10,000 concurrently authenticated sessions.
-- A smaller number of simultaneous answer generations, established by load testing rather than assumed from session count.
-- Web documents and uploaded enterprise documents are stored in S3.
-- Documents require metadata filtering and, for regulated repositories, document-level access control.
-- English is the primary language initially.
-- The platform requires streaming responses.
-- The production embedding model and reranking model have been selected and measured against the real corpus.
-- Bedrock model availability and inference profiles will be discovered from AWS rather than pinned by assumptions in this repository.
-- AWS region selection will satisfy data residency and model availability requirements.
-- The POC can be retained as a local development and regression environment.
+- 10,000 concurrently authenticated user sessions as a load-test objective, not established capacity.
+- Distributed answer-generation capacity sized by measured peak generation concurrency.
+- Web documents and uploaded enterprise documents stored in S3.
+- Tenant metadata filtering and, where required, document-level access control.
+- English as the initial supported language and streaming as the primary chat transport.
+- A production embedding model selected through corpus-specific evaluation.
+- A reranker measured against retrieval, answer-support, and latency metrics.
+- Versioned embeddings, retrieval/reranker configuration, and index rollback.
+- AWS model availability, inference profiles, quotas, and region suitability verified in the target account.
+- The POC retained as a local development and baseline-regression environment.
 
 ### 1.3 Invariants preserved from POC
 
@@ -87,7 +90,7 @@ The production implementation must retain these POC principles:
 
 ### 2.1 User behavior
 
-Assume users ask questions over one or more authorized knowledge collections. A question may trigger:
+Users ask questions over one or more authorized knowledge collections. A question triggers:
 
 - input guardrail evaluation;
 - tenant/context validation;
@@ -110,7 +113,7 @@ The system architect should approve a peak model with measured parameters:
 | Parameter | Example planning value | Required source |
 |---|---|---|
 | Concurrent authenticated users | 10,000 | Product requirement |
-| Active chat sessions generating answers | 10% of users | Initial assumption; replace with telemetry |
+| Active chat sessions generating answers | 10% of users | Initial planning ratio; replace with telemetry |
 | Concurrent generation requests | 1,000 | Derived after load test |
 | Average turns per active session per minute | 0.5–2 | Product analytics |
 | Average input tokens | 2,000–6,000 including retrieved context | Prompt benchmark |
@@ -180,17 +183,18 @@ The terminal event must contain a stable `requestId`. Errors must use typed appl
 
 ### 3.3 Retrieval tier
 
-#### Assumed production retrieval state
+#### Production retrieval requirements (not implemented)
 
-The production pipeline has already:
+Before production launch, the retrieval pipeline must:
 
-1. benchmarked and selected a high-quality embedding model;
-2. versioned embeddings and indexing configuration;
-3. deployed a reranker as a separate retrieval stage;
-4. measured Recall@K, NDCG, answer-support, and latency against the real corpus;
-5. enabled versioned reindexing and rollback.
+1. benchmark and version the production embedding model and indexing configuration;
+2. retrieve candidates through both dense-vector and BM25/exact-identifier channels;
+3. fuse ranked candidates (for example, with reciprocal rank fusion) before reranking;
+4. apply authorization filters before passage text is exposed to reranking or generation;
+5. measure channel, fusion, and reranker performance against an approved corpus;
+6. support versioned reindexing, consistency checks, activation, and rollback.
 
-These assumptions prevent this document from proposing a second local embedding experiment as part of architecture design.
+The current repository has local dense FAISS retrieval only. Validate whether Managed Knowledge Base hybrid retrieval meets BM25 and exact-identifier requirements; if it does not, implement and synchronize a separate lexical index/channel. Do not describe model selection, reranking, measurements, or rollback as completed until reproducible evidence exists.
 
 #### Default knowledge-base choice
 
@@ -453,7 +457,7 @@ flowchart LR
 
     G --> KB[Bedrock Managed Knowledge Base]
     KB --> RET[Candidate retrieval]
-    RET --> RRANK[Assumed production reranking stage]
+    RET --> RRANK[Production reranking stage]
     RRANK --> CITE[Citation and ACL verification]
     CITE --> ROUTE[Bedrock model router]
 
@@ -570,7 +574,7 @@ Targets should be measured, not marketed as guaranteed:
 | Data RPO | <= 15 minutes for source and index metadata |
 | Data RTO | <= 60 minutes for warm-standby recovery |
 
-The targets are launch proposals and must be approved with the real prompt, model, corpus, and network benchmark.
+The targets are launch baselines and must be approved with the real prompt, model, corpus, and network benchmark.
 
 For disaster recovery:
 
@@ -599,7 +603,7 @@ The production retrieval pipeline is:
 8. reject passages that cannot be tied to authorized evidence;
 9. abstain or generate with the final supporting set.
 
-The assumed reranking stage must be evaluated independently:
+The production reranking stage is evaluated continuously:
 
 - candidate recall before reranking;
 - reranker recall and NDCG after reranking;
@@ -849,7 +853,7 @@ Use service tiers deliberately:
 - **Priority:** latency-sensitive premium requests after quota/cost approval;
 - **Reserved:** predictable baseline mission-critical traffic after a measured demand commitment.
 
-The POC must not assume that Priority or Reserved capacity is available. Capacity, regions, current model support, and account-level quota must be confirmed during launch planning.
+Priority and Reserved capacity must be confirmed for the launch account and region. Capacity, region support, current model support, and account-level quota are deployment inputs, not implicit guarantees.
 
 ### 7.4 Cost attribution
 
@@ -1079,6 +1083,8 @@ Maintain at least:
 - staging;
 - production.
 
+In the current repository, validated environment settings and application-level dependency injection are implemented for the local composition, with fake dependencies available to tests. `staging` and `production` are intentionally rejected at app creation; there are no production provider adapters yet. Completing production composition requires explicit adapters and lifecycle handling for identity/authorization, retrieval, generation, guardrails, storage, cache/capacity, and telemetry. Environment names alone must never activate local defaults as a production fallback.
+
 Staging must include:
 
 - real Bedrock Guardrails and model routes;
@@ -1212,6 +1218,8 @@ The platform may be considered launch-ready only when:
 
 ### Phase 1: Production contract and isolation
 
+- Preserve the implemented local foundation: validated settings, application factory, injectable local service/guardrail factories, and test fakes; keep staging/production fail-closed until their adapters pass contract tests.
+- Finish extracting retrieval, generation, cache, storage, authorization, and telemetry ports from the local RAG service without changing local API behavior.
 - define user, tenant, collection, and document policies;
 - integrate Cognito and server-side authorization;
 - replace shared API key with JWT/service credentials;
@@ -1228,7 +1236,7 @@ The platform may be considered launch-ready only when:
 - deploy S3/SQS/ECS ingestion;
 - implement idempotent jobs and DLQs;
 - migrate or build the production embedding pipeline;
-- deploy and validate the assumed reranking stage;
+- operate and continuously validate the production reranking stage;
 - deploy the Bedrock Managed Knowledge Base or approved alternative;
 - implement tenant/document metadata filters;
 - implement versioned index manifests and rollback.
@@ -1361,7 +1369,7 @@ Provider SDK details should remain behind adapters. Region and model migration s
 | Retrieval fallback | OpenSearch Serverless | Elastic hybrid search and direct retrieval control |
 | Relational fallback | Aurora PostgreSQL + pgvector | ACID metadata and relational joins, not first-line vector scaling |
 | Ingestion queue | SQS + EventBridge | Durable retries and independent embedding/chat capacity |
-| Ingestion compute | ECS Fargate | Parsing and embedding exceed lightweight webhook assumptions |
+| Ingestion compute | ECS Fargate | Parsing and embedding exceed lightweight webhook constraints |
 | Cache | ElastiCache for Redis | Shared, distributed, low-latency cache and rate state |
 | Job/history state | DynamoDB | Durable, high-scale key-based state and TTL |
 | Secrets and encryption | Secrets Manager + KMS | Least-privilege credential and encryption lifecycle |
@@ -1380,7 +1388,7 @@ The production target becomes a credible 10,000-user architecture when it:
 - uses Bedrock model routing and bounded fallback;
 - reserves and monitors actual Bedrock capacity;
 - uses managed AWS storage and compute for scale;
-- applies the production embedding/reranker assumptions with measured quality gates;
+- applies the production embedding/reranker implementation with measured quality gates;
 - proves accuracy, citation grounding, safety, latency, cost, and resilience with automated evidence.
 
 The architecture is future-proof only when model, index, prompt, reranker, guardrail, and policy versions are immutable, visible, and independently evaluable.

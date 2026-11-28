@@ -2,15 +2,13 @@ from __future__ import annotations
 
 import json
 import logging
-import os
 import secrets
 import threading
 import time
 import uuid
 from collections import OrderedDict
 from contextlib import asynccontextmanager
-from functools import lru_cache
-from typing import AsyncIterator
+from typing import Any, AsyncGenerator, Callable, Iterator, Protocol
 
 import requests
 from fastapi import Depends, FastAPI, HTTPException, Request, status
@@ -19,6 +17,7 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import BaseModel, Field
 
 from common.branding import get_branding
+from common.settings import Settings
 from runtime.guardrail import GuardrailResult, ScopeGuardrail, build_guardrail
 from runtime.rag_service import LocalRAGService
 
@@ -31,57 +30,67 @@ class HealthResponse(BaseModel):
     status: str
 
 
-_brand = get_branding()
+class RAGService(Protocol):
+    ollama_base_url: str
+    ollama_model: str
+
+    def answer(self, question: str) -> dict[str, Any]: ...
+
+    def answer_stream(self, question: str) -> Iterator[dict[str, Any]]: ...
 
 
-@asynccontextmanager
-async def lifespan(_: FastAPI) -> AsyncIterator[None]:
-    get_service()
-    yield
-
-
-app = FastAPI(title=f"{_brand.app_name} API", version="0.1.0", lifespan=lifespan)
 logger = logging.getLogger(__name__)
 _bearer_scheme = HTTPBearer(auto_error=False)
-_rate_lock = threading.Lock()
-_rate_windows: OrderedDict[str, tuple[int, int]] = OrderedDict()
-_max_concurrent_generations = int(os.getenv("API_MAX_CONCURRENT_GENERATIONS", "2"))
-if _max_concurrent_generations < 1:
-    raise RuntimeError("API_MAX_CONCURRENT_GENERATIONS must be at least 1.")
-_generation_slots = threading.BoundedSemaphore(_max_concurrent_generations)
-
-# Guardrail is None when GUARDRAIL_ENABLED != "true" (the default)
-_guardrail: ScopeGuardrail | None = build_guardrail()
 
 
-@lru_cache(maxsize=1)
-def get_service() -> LocalRAGService:
+def build_local_service(settings: Settings) -> LocalRAGService:
     return LocalRAGService(
-        index_dir=os.getenv("RAG_INDEX_DIR", "data/index"),
-        embedding_model=os.getenv(
-            "RAG_EMBEDDING_MODEL", "sentence-transformers/all-MiniLM-L6-v2"
-        ),
-        ollama_base_url=os.getenv("OLLAMA_BASE_URL", "http://localhost:11434"),
-        ollama_model=os.getenv("OLLAMA_MODEL", "gemma4:latest"),
-        top_k=int(os.getenv("RAG_TOP_K", "4")),
-        similarity_threshold=float(os.getenv("RAG_SIMILARITY_THRESHOLD", "0.32")),
-        min_sources=int(os.getenv("RAG_MIN_SOURCES", "2")),
-        response_cache_ttl_seconds=int(os.getenv("RAG_RESPONSE_CACHE_TTL_SECONDS", "900")),
-        response_cache_max_entries=int(os.getenv("RAG_RESPONSE_CACHE_MAX_ENTRIES", "128")),
-        clarification_enabled=os.getenv("RAG_CLARIFICATION_ENABLED", "true").lower() == "true",
-        web_search_enabled=os.getenv("WEB_SEARCH_ENABLED", "false").lower() == "true",
-        web_search_max_results=int(os.getenv("WEB_SEARCH_MAX_RESULTS", "4")),
-        answer_options_enabled=os.getenv("RAG_ANSWER_OPTIONS_ENABLED", "true").lower() == "true",
-        ollama_timeout=int(os.getenv("OLLAMA_TIMEOUT", "600")),
-        ollama_think=os.getenv("OLLAMA_THINK", "false").lower() == "true",
+        index_dir=settings.index_dir,
+        embedding_model=settings.embedding_model,
+        ollama_base_url=settings.ollama_base_url,
+        ollama_model=settings.ollama_model,
+        top_k=settings.top_k,
+        similarity_threshold=settings.similarity_threshold,
+        min_sources=settings.min_sources,
+        response_cache_ttl_seconds=settings.response_cache_ttl_seconds,
+        response_cache_max_entries=settings.response_cache_max_entries,
+        clarification_enabled=settings.clarification_enabled,
+        web_search_enabled=settings.web_search_enabled,
+        web_search_max_results=settings.web_search_max_results,
+        answer_options_enabled=settings.answer_options_enabled,
+        ollama_timeout=settings.ollama_timeout_seconds,
+        ollama_think=settings.ollama_think,
     )
+
+
+def build_local_guardrail(settings: Settings) -> ScopeGuardrail | None:
+    return build_guardrail(
+        enabled=settings.guardrail_enabled,
+        ollama_base_url=settings.ollama_base_url,
+        ollama_model=settings.guardrail_model,
+        timeout=settings.guardrail_timeout_seconds,
+        think=settings.ollama_think,
+    )
+
+
+ServiceFactory = Callable[[Settings], RAGService]
+GuardrailFactory = Callable[[Settings], ScopeGuardrail | None]
+
+
+def get_service(request: Request) -> RAGService:
+    return request.app.state.service
+
+
+def get_guardrail(request: Request) -> ScopeGuardrail | None:
+    return request.app.state.guardrail
 
 
 def require_api_access(
     request: Request,
     credentials: HTTPAuthorizationCredentials | None = Depends(_bearer_scheme),
 ) -> None:
-    expected_key = os.getenv("API_KEY", "").strip()
+    settings: Settings = request.app.state.settings
+    expected_key = settings.api_key
     if not expected_key:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -94,25 +103,13 @@ def require_api_access(
             headers={"WWW-Authenticate": "Bearer"},
         )
 
-    try:
-        limit = int(os.getenv("API_RATE_LIMIT_PER_MINUTE", "30"))
-    except ValueError as exc:
-        logger.error("API_RATE_LIMIT_PER_MINUTE must be an integer.")
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="API rate limiting is misconfigured.",
-        ) from exc
-    if limit < 1:
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="API rate limiting is misconfigured.",
-        )
-
+    limit = settings.api_rate_limit_per_minute
     client_ip = request.client.host if request.client else "unknown"
     now = int(time.time())
     window = now // 60
-    with _rate_lock:
-        current_window, count = _rate_windows.get(client_ip, (window, 0))
+    with request.app.state.rate_lock:
+        rate_windows: OrderedDict[str, tuple[int, int]] = request.app.state.rate_windows
+        current_window, count = rate_windows.get(client_ip, (window, 0))
         if current_window != window:
             current_window, count = window, 0
         if count >= limit:
@@ -122,14 +119,15 @@ def require_api_access(
                 detail="Rate limit exceeded.",
                 headers={"Retry-After": str(retry_after)},
             )
-        _rate_windows[client_ip] = (current_window, count + 1)
-        _rate_windows.move_to_end(client_ip)
-        while len(_rate_windows) > 10_000:
-            _rate_windows.popitem(last=False)
+        rate_windows[client_ip] = (current_window, count + 1)
+        rate_windows.move_to_end(client_ip)
+        while len(rate_windows) > 10_000:
+            rate_windows.popitem(last=False)
 
 
-def acquire_generation_slot() -> None:
-    if not _generation_slots.acquire(blocking=False):
+def acquire_generation_slot(request: Request) -> None:
+    generation_slots: threading.BoundedSemaphore = request.app.state.generation_slots
+    if not generation_slots.acquire(blocking=False):
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Generation capacity is busy; retry shortly.",
@@ -137,7 +135,6 @@ def acquire_generation_slot() -> None:
         )
 
 
-@app.middleware("http")
 async def log_request(request: Request, call_next):
     request_id = uuid.uuid4().hex
     started_at = time.perf_counter()
@@ -170,17 +167,15 @@ async def log_request(request: Request, call_next):
         )
 
 
-@app.get("/health", response_model=HealthResponse)
 def health() -> HealthResponse:
     return HealthResponse(status="ok")
 
 
-@app.get("/health/ready", response_model=HealthResponse)
-def readiness() -> HealthResponse:
+def readiness(request: Request, service: RAGService = Depends(get_service)) -> HealthResponse:
+    settings: Settings = request.app.state.settings
     try:
-        if not os.getenv("API_KEY", "").strip():
+        if not settings.api_key:
             raise RuntimeError("API_KEY is not configured.")
-        service = get_service()
         response = requests.get(
             f"{service.ollama_base_url}/api/tags",
             timeout=(2, 5),
@@ -206,10 +201,10 @@ def readiness() -> HealthResponse:
     return HealthResponse(status="ok")
 
 
-@app.get("/")
 def root() -> dict:
+    brand = get_branding()
     return {
-        "name": f"{_brand.app_name} API",
+        "name": f"{brand.app_name} API",
         "status": "ok",
         "docs": "/docs",
         "health": "/health",
@@ -217,25 +212,76 @@ def root() -> dict:
     }
 
 
-@app.post("/")
-def root_chat(payload: ChatRequest, _: None = Depends(require_api_access)) -> dict:
-    return chat(payload)
+def _chat_response(
+    payload: ChatRequest,
+    service: RAGService,
+    guardrail: ScopeGuardrail | None,
+) -> dict[str, Any]:
+    t0 = time.perf_counter()
+    if guardrail is not None:
+        gate = guardrail.check(payload.question)
+        if not gate.allowed:
+            return {
+                "question": payload.question,
+                "answer": gate.rejection_message,
+                "abstained": True,
+                "abstain_reason": gate.category,
+                "citations": [],
+                "retrieval": [],
+                "cache_hit": False,
+                "latency_ms": round((time.perf_counter() - t0) * 1000, 2),
+                "guardrail_blocked": True,
+                "guardrail_category": gate.category,
+                "clarification_questions": [],
+                "answer_options": [],
+                "web_search_used": False,
+            }
+
+    result = service.answer(payload.question)
+    return {
+        "question": payload.question,
+        "answer": result["answer"],
+        "abstained": result["abstained"],
+        "abstain_reason": result["abstain_reason"],
+        "citations": result["citations"],
+        "retrieval": result["retrieval"],
+        "cache_hit": result.get("cache_hit", False),
+        "latency_ms": round((time.perf_counter() - t0) * 1000, 2),
+        "guardrail_blocked": False,
+        "guardrail_category": "allowed",
+        "clarification_questions": result.get("clarification_questions", []),
+        "answer_options": result.get("answer_options", []),
+        "web_search_used": result.get("web_search_used", False),
+    }
 
 
-@app.post("/chat/stream")
+def root_chat(
+    payload: ChatRequest,
+    request: Request,
+    _: None = Depends(require_api_access),
+) -> dict[str, Any]:
+    acquire_generation_slot(request)
+    try:
+        return _chat_response(payload, get_service(request), get_guardrail(request))
+    finally:
+        request.app.state.generation_slots.release()
+
+
 def chat_stream(
+    request: Request,
     payload: ChatRequest,
     _: None = Depends(require_api_access),
+    svc: RAGService = Depends(get_service),
+    guardrail: ScopeGuardrail | None = Depends(get_guardrail),
 ) -> StreamingResponse:
     """Streaming endpoint — yields NDJSON token events then a final meta event."""
-    svc = get_service()
-    acquire_generation_slot()
+    acquire_generation_slot(request)
 
-    def generate():
+    def generate() -> Iterator[str]:
         try:
             # Guardrail check (no-op when GUARDRAIL_ENABLED != true)
-            if _guardrail is not None:
-                gate: GuardrailResult = _guardrail.check(payload.question)
+            if guardrail is not None:
+                gate: GuardrailResult = guardrail.check(payload.question)
                 if not gate.allowed:
                     yield json.dumps({"type": "token", "text": gate.rejection_message}) + "\n"
                     yield json.dumps({
@@ -255,57 +301,76 @@ def chat_stream(
             for event in svc.answer_stream(payload.question):
                 yield json.dumps(event) + "\n"
         finally:
-            _generation_slots.release()
+            request.app.state.generation_slots.release()
 
     return StreamingResponse(generate(), media_type="application/x-ndjson")
 
 
-@app.post("/chat")
-def chat(payload: ChatRequest, _: None = Depends(require_api_access)) -> dict:
-    acquire_generation_slot()
-    t0 = time.perf_counter()
-
+def chat(
+    request: Request,
+    payload: ChatRequest,
+    _: None = Depends(require_api_access),
+    service: RAGService = Depends(get_service),
+    guardrail: ScopeGuardrail | None = Depends(get_guardrail),
+) -> dict[str, Any]:
+    acquire_generation_slot(request)
     try:
-        # ── Scope guardrail (inactive unless GUARDRAIL_ENABLED=true) ──────────
-        if _guardrail is not None:
-            gate: GuardrailResult = _guardrail.check(payload.question)
-            if not gate.allowed:
-                elapsed_ms = round((time.perf_counter() - t0) * 1000, 2)
-                return {
-                    "question": payload.question,
-                    "answer": gate.rejection_message,
-                    "abstained": True,
-                    "abstain_reason": gate.category,
-                    "citations": [],
-                    "retrieval": [],
-                    "cache_hit": False,
-                    "latency_ms": elapsed_ms,
-                    "guardrail_blocked": True,
-                    "guardrail_category": gate.category,
-                    "clarification_questions": [],
-                    "answer_options": [],
-                    "web_search_used": False,
-                }
-        # ─────────────────────────────────────────────────────────────────────
-
-        svc = get_service()
-        result = svc.answer(payload.question)
-        elapsed_ms = round((time.perf_counter() - t0) * 1000, 2)
-
-        return {
-            "question": payload.question,
-            "answer": result["answer"],
-            "abstained": result["abstained"],
-            "abstain_reason": result["abstain_reason"],
-            "citations": result["citations"],
-            "retrieval": result["retrieval"],
-            "cache_hit": result.get("cache_hit", False),
-            "latency_ms": elapsed_ms,
-            "guardrail_blocked": False,
-            "guardrail_category": "allowed",
-            "clarification_questions": result.get("clarification_questions", []),
-            "answer_options": result.get("answer_options", []),
-            "web_search_used": result.get("web_search_used", False),
-        }
+        return _chat_response(payload, service, guardrail)
     finally:
-        _generation_slots.release()
+        request.app.state.generation_slots.release()
+
+
+def create_app(
+    settings: Settings | None = None,
+    *,
+    service_factory: ServiceFactory | None = None,
+    guardrail_factory: GuardrailFactory | None = None,
+) -> FastAPI:
+    settings = settings or Settings.from_env()
+    if settings.app_env in {"staging", "production"}:
+        raise RuntimeError(
+            f"APP_ENV={settings.app_env} is not available until production adapters are implemented."
+        )
+    if settings.app_env == "test" and service_factory is None:
+        raise ValueError("Tests must inject a service_factory.")
+    if settings.app_env == "test" and guardrail_factory is None:
+        raise ValueError("Tests must inject a guardrail_factory.")
+
+    selected_service_factory = (
+        build_local_service if service_factory is None else service_factory
+    )
+    selected_guardrail_factory = (
+        build_local_guardrail if guardrail_factory is None else guardrail_factory
+    )
+    brand = get_branding()
+
+    @asynccontextmanager
+    async def lifespan(application: FastAPI) -> AsyncGenerator[None, None]:
+        application.state.service = selected_service_factory(settings)
+        application.state.guardrail = selected_guardrail_factory(settings)
+        yield
+
+    application = FastAPI(
+        title=f"{brand.app_name} API",
+        version="0.1.0",
+        lifespan=lifespan,
+    )
+    application.state.settings = settings
+    application.state.rate_lock = threading.Lock()
+    application.state.rate_windows = OrderedDict()
+    application.state.generation_slots = threading.BoundedSemaphore(
+        settings.api_max_concurrent_generations
+    )
+    application.middleware("http")(log_request)
+    application.add_api_route("/health", health, methods=["GET"], response_model=HealthResponse)
+    application.add_api_route(
+        "/health/ready", readiness, methods=["GET"], response_model=HealthResponse
+    )
+    application.add_api_route("/", root, methods=["GET"])
+    application.add_api_route("/", root_chat, methods=["POST"])
+    application.add_api_route("/chat/stream", chat_stream, methods=["POST"])
+    application.add_api_route("/chat", chat, methods=["POST"])
+    return application
+
+
+app = create_app()
